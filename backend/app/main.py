@@ -4,6 +4,7 @@ from fastapi import FastAPI, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import check_db_connection
+from app.api.auth import router as auth_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,9 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# Include API Routers
+app.include_router(auth_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/", tags=["Root"])
