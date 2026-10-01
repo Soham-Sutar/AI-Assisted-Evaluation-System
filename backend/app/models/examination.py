@@ -104,6 +104,11 @@ class Examination(Base):
         cascade="all, delete-orphan",
         order_by="Question.question_number",
     )
+    answer_sheets: Mapped[List["AnswerSheet"]] = relationship(
+        "AnswerSheet",
+        back_populates="examination",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Examination {self.name} ({self.academic_year} {self.semester}) [{self.status}]>"

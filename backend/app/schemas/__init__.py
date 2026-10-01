@@ -4,6 +4,9 @@ from app.schemas.faculty_subject import FacultySubjectCreate, FacultySubjectRead
 from app.schemas.examination import ExaminationBase, ExaminationCreate, ExaminationUpdate, ExaminationRead
 from app.schemas.question import QuestionBase, QuestionCreate, QuestionUpdate, QuestionRead
 from app.schemas.student import StudentBase, StudentCreate, StudentUpdate, StudentRead
+from app.schemas.answer_page import AnswerPageRead
+from app.schemas.answer import AnswerBase, AnswerCorrectionUpdate, AnswerRead
+from app.schemas.answer_sheet import AnswerSheetBase, AnswerSheetRead, AnswerSheetDetailRead
 
 __all__ = [
     "UserRead",
@@ -27,4 +30,12 @@ __all__ = [
     "StudentCreate",
     "StudentUpdate",
     "StudentRead",
+    "AnswerPageRead",
+    "AnswerBase",
+    "AnswerCorrectionUpdate",
+    "AnswerRead",
+    "AnswerSheetBase",
+    "AnswerSheetRead",
+    "AnswerSheetDetailRead",
 ]
+

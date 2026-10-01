@@ -1,8 +1,8 @@
 import uuid
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
@@ -53,5 +53,12 @@ class Student(Base):
         nullable=False,
     )
 
+    # Relationships
+    answer_sheets: Mapped[List["AnswerSheet"]] = relationship(
+        "AnswerSheet",
+        back_populates="student",
+    )
+
     def __repr__(self) -> str:
         return f"<Student {self.register_number}: {self.name}>"
+

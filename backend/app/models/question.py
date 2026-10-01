@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from sqlalchemy import (
     String,
@@ -80,6 +80,11 @@ class Question(Base):
     examination: Mapped["Examination"] = relationship(
         "Examination",
         back_populates="questions",
+    )
+    answers: Mapped[List["Answer"]] = relationship(
+        "Answer",
+        back_populates="question",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:

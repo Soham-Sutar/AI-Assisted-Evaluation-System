@@ -10,6 +10,8 @@ from app.api.faculty_subjects import router as faculty_subjects_router
 from app.api.examinations import router as examinations_router
 from app.api.questions import router as questions_router
 from app.api.students import router as students_router
+from app.api.answer_sheets import router as answer_sheets_router
+from app.api.answers import router as answers_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +55,9 @@ app.include_router(faculty_subjects_router, prefix=settings.API_V1_STR)
 app.include_router(examinations_router, prefix=settings.API_V1_STR)
 app.include_router(questions_router, prefix=settings.API_V1_STR)
 app.include_router(students_router, prefix=settings.API_V1_STR)
+app.include_router(answer_sheets_router, prefix=settings.API_V1_STR)
+app.include_router(answers_router, prefix=settings.API_V1_STR)
+
 
 
 @app.get("/", tags=["Root"])
