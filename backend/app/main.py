@@ -5,6 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import check_db_connection
 from app.api.auth import router as auth_router
+from app.api.subjects import router as subjects_router
+from app.api.faculty_subjects import router as faculty_subjects_router
+from app.api.examinations import router as examinations_router
+from app.api.questions import router as questions_router
+from app.api.students import router as students_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,8 +46,13 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-# Include API Routers
+# Include API Routers under /api
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(subjects_router, prefix=settings.API_V1_STR)
+app.include_router(faculty_subjects_router, prefix=settings.API_V1_STR)
+app.include_router(examinations_router, prefix=settings.API_V1_STR)
+app.include_router(questions_router, prefix=settings.API_V1_STR)
+app.include_router(students_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/", tags=["Root"])
