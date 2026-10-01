@@ -1,8 +1,9 @@
 import uuid
 from enum import Enum
+from typing import List
 from datetime import datetime, timezone
 from sqlalchemy import String, Boolean, DateTime, Enum as SQLEnum, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
@@ -60,6 +61,13 @@ class User(Base):
         default=utc_now,
         onupdate=utc_now,
         nullable=False,
+    )
+
+    # Relationships
+    faculty_subjects: Mapped[List["FacultySubject"]] = relationship(
+        "FacultySubject",
+        back_populates="faculty",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
