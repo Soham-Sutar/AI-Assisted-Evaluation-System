@@ -1,6 +1,6 @@
 import uuid
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy import (
     String,
@@ -105,6 +105,11 @@ class Answer(Base):
     )
     page: Mapped[Optional["AnswerPage"]] = relationship(
         "AnswerPage",
+    )
+    assignments: Mapped[List["Assignment"]] = relationship(
+        "Assignment",
+        back_populates="answer",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
