@@ -49,6 +49,7 @@ if settings.BACKEND_CORS_ORIGINS:
     )
 
 from app.api.assignments import router as assignments_router
+from app.api.evaluations import router as evaluations_router
 
 # Include API Routers under /api
 app.include_router(auth_router, prefix=settings.API_V1_STR)
@@ -60,6 +61,7 @@ app.include_router(students_router, prefix=settings.API_V1_STR)
 app.include_router(answer_sheets_router, prefix=settings.API_V1_STR)
 app.include_router(answers_router, prefix=settings.API_V1_STR)
 app.include_router(assignments_router, prefix=settings.API_V1_STR)
+app.include_router(evaluations_router, prefix=settings.API_V1_STR)
 
 
 

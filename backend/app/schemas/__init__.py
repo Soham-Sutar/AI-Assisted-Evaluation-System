@@ -8,6 +8,7 @@ from app.schemas.answer_page import AnswerPageRead
 from app.schemas.answer import AnswerBase, AnswerCorrectionUpdate, AnswerRead
 from app.schemas.answer_sheet import AnswerSheetBase, AnswerSheetRead, AnswerSheetDetailRead
 from app.schemas.assignment import AssignmentCreate, AssignmentUpdate, AssignmentRead
+from app.schemas.evaluation import EvaluationCreate, EvaluationRead
 
 __all__ = [
     "UserRead",
@@ -41,4 +42,6 @@ __all__ = [
     "AssignmentCreate",
     "AssignmentUpdate",
     "AssignmentRead",
+    "EvaluationCreate",
+    "EvaluationRead",
 ]

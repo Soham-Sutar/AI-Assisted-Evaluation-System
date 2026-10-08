@@ -111,6 +111,11 @@ class Answer(Base):
         back_populates="answer",
         cascade="all, delete-orphan",
     )
+    evaluations: Mapped[List["Evaluation"]] = relationship(
+        "Evaluation",
+        back_populates="answer",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Answer {self.id} [Sheet: {self.answer_sheet_id}, Q: {self.question_id}, Status: {self.status}]>"

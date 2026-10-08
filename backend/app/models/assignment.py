@@ -109,6 +109,11 @@ class Assignment(Base):
         "User",
         back_populates="assignments",
     )
+    evaluations: Mapped[list["Evaluation"]] = relationship(
+        "Evaluation",
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return (

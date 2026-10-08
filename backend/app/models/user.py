@@ -74,6 +74,11 @@ class User(Base):
         back_populates="faculty",
         cascade="all, delete-orphan",
     )
+    evaluations: Mapped[List["Evaluation"]] = relationship(
+        "Evaluation",
+        back_populates="faculty",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<User {self.email} ({self.role})>"
