@@ -10,6 +10,7 @@ from app.models.answer_page import AnswerPage
 from app.models.answer import Answer, SegmentationStatus
 from app.models.assignment import Assignment, AssignmentType, AssignmentStatus
 from app.models.evaluation import Evaluation
+from app.models.ai_evaluation import AIEvaluation, AIEvaluationStatus
 
 __all__ = [
     "Base",
@@ -30,5 +31,7 @@ __all__ = [
     "AssignmentType",
     "AssignmentStatus",
     "Evaluation",
+    "AIEvaluation",
+    "AIEvaluationStatus",
 ]
 

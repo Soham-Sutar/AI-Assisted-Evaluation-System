@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     OCR_LANGUAGE: str = "eng"
     AI_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     AI_DEVICE: str = "cpu"
+    AI_PROVIDER: str = "auto"
     AI_SEMANTIC_WEIGHT: float = 0.5
     AI_KEYPOINT_WEIGHT: float = 0.5
 
@@ -50,4 +51,38 @@ class Settings(BaseSettings):
     ]
 
 
+    @property
+    def database_url(self):
+        return self.DATABASE_URL
+
+    @property
+    def storage_root(self):
+        from pathlib import Path
+        return Path(self.STORAGE_PATH).resolve()
+
+    @property
+    def ai_model_name(self):
+        return self.AI_MODEL_NAME
+
+    @property
+    def ai_device(self):
+        return self.AI_DEVICE
+
+    @property
+    def ai_provider(self):
+        return self.AI_PROVIDER
+
+    @property
+    def ai_semantic_weight(self):
+        return self.AI_SEMANTIC_WEIGHT
+
+    @property
+    def ai_keypoint_weight(self):
+        return self.AI_KEYPOINT_WEIGHT
+
+
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    return settings

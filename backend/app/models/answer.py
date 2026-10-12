@@ -116,6 +116,16 @@ class Answer(Base):
         back_populates="answer",
         cascade="all, delete-orphan",
     )
+    ai_evaluations: Mapped[List["AIEvaluation"]] = relationship(
+        "AIEvaluation",
+        back_populates="answer",
+        cascade="all, delete-orphan",
+        order_by="desc(AIEvaluation.created_at)",
+    )
+
+    @property
+    def latest_ai_evaluation(self) -> Optional["AIEvaluation"]:
+        return self.ai_evaluations[0] if self.ai_evaluations else None
 
     def __repr__(self) -> str:
         return f"<Answer {self.id} [Sheet: {self.answer_sheet_id}, Q: {self.question_id}, Status: {self.status}]>"

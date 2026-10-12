@@ -16,3 +16,5 @@ numpy>=1.26.0
 pillow>=10.2.0
 pytesseract>=0.3.10
 pypdfium2>=4.30.0
+scikit-learn>=1.4.0
+sentence-transformers>=2.5.0

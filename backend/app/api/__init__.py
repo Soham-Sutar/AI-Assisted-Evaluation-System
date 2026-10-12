@@ -8,6 +8,7 @@ from app.api.answer_sheets import router as answer_sheets_router
 from app.api.answers import router as answers_router
 from app.api.assignments import router as assignments_router
 from app.api.evaluations import router as evaluations_router
+from app.api.ai_evaluations import router as ai_evaluations_router
 
 __all__ = [
     "auth_router",
@@ -20,5 +21,6 @@ __all__ = [
     "answers_router",
     "assignments_router",
     "evaluations_router",
+    "ai_evaluations_router",
 ]
 
