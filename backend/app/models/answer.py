@@ -122,10 +122,20 @@ class Answer(Base):
         cascade="all, delete-orphan",
         order_by="desc(AIEvaluation.created_at)",
     )
+    review_cases: Mapped[List["ReviewCase"]] = relationship(
+        "ReviewCase",
+        back_populates="answer",
+        cascade="all, delete-orphan",
+        order_by="desc(ReviewCase.created_at)",
+    )
 
     @property
     def latest_ai_evaluation(self) -> Optional["AIEvaluation"]:
         return self.ai_evaluations[0] if self.ai_evaluations else None
+
+    @property
+    def latest_review_case(self) -> Optional["ReviewCase"]:
+        return self.review_cases[0] if self.review_cases else None
 
     def __repr__(self) -> str:
         return f"<Answer {self.id} [Sheet: {self.answer_sheet_id}, Q: {self.question_id}, Status: {self.status}]>"

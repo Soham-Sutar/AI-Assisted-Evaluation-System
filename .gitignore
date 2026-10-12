@@ -28,3 +28,6 @@ storage/model_answers/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Uploaded answer sheets and generated processing artifacts
+/storage/answer_sheets/

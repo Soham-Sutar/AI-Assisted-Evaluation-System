@@ -11,6 +11,12 @@ from app.models.answer import Answer, SegmentationStatus
 from app.models.assignment import Assignment, AssignmentType, AssignmentStatus
 from app.models.evaluation import Evaluation
 from app.models.ai_evaluation import AIEvaluation, AIEvaluationStatus
+from app.models.review_case import (
+    ReviewCase,
+    ReviewTriggerType,
+    ReviewStatus,
+    ReviewPriority,
+)
 
 __all__ = [
     "Base",
@@ -33,4 +39,8 @@ __all__ = [
     "Evaluation",
     "AIEvaluation",
     "AIEvaluationStatus",
+    "ReviewCase",
+    "ReviewTriggerType",
+    "ReviewStatus",
+    "ReviewPriority",
 ]
