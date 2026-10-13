@@ -23,6 +23,9 @@ storage/original/
 storage/processed/
 storage/segmented/
 storage/model_answers/
+storage/exports/
+storage/debug/
+
 
 # Test/cache
 .pytest_cache/

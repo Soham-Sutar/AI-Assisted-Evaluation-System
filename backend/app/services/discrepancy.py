@@ -100,6 +100,10 @@ def enrich_review_case(case: ReviewCase) -> ReviewCaseRead:
     faculty_eval = case.faculty_evaluation
     faculty = faculty_eval.faculty if faculty_eval else None
     ai_eval = case.ai_evaluation
+    sheet = answer.answer_sheet if answer else None
+    student = sheet.student if sheet else None
+    exam = sheet.examination if sheet else None
+    reviewer = case.reviewer if case.reviewer_id else None
 
     return ReviewCaseRead(
         id=case.id,
@@ -114,17 +118,39 @@ def enrich_review_case(case: ReviewCase) -> ReviewCaseRead:
         note=case.note,
         trigger_reason=case.note,
         reviewer_id=case.reviewer_id,
+        reviewer_name=reviewer.full_name if reviewer else None,
         reviewer_marks=case.reviewer_marks,
         reviewer_comments=case.reviewer_comments,
         created_at=case.created_at,
         resolved_at=case.resolved_at,
+        question_id=question.id if question else None,
         question_number=question.question_number if question else None,
         question_text=question.question_text if question else None,
         max_marks=question.max_marks if question else None,
+
+        model_answer_text=question.model_answer_text if question else None,
+        rubric_json=question.rubric_json if question else None,
         faculty_marks=faculty_eval.marks_awarded if faculty_eval else None,
-        ai_marks=ai_eval.ai_marks if ai_eval else None,
+        faculty_comments=faculty_eval.comments if faculty_eval else None,
         faculty_name=faculty.full_name if faculty else None,
+        faculty_submitted_at=faculty_eval.submitted_at if faculty_eval else None,
+        ai_marks=ai_eval.ai_marks if ai_eval else None,
+        ai_confidence_score=ai_eval.confidence_score if ai_eval else None,
+        ai_semantic_similarity=ai_eval.semantic_similarity if ai_eval else None,
+        ai_keypoint_score=ai_eval.keypoint_score if ai_eval else None,
+        ai_explanation_json=ai_eval.explanation_json if ai_eval else None,
+        ai_model_name=ai_eval.model_name if ai_eval else None,
+        crop_image_path=answer.crop_image_path if answer else None,
+        ocr_text=answer.corrected_text or answer.ocr_text if answer else None,
+        student_id=student.id if student else None,
+        student_name=student.name if student else None,
+        register_number=student.register_number if student else None,
+        student_register_number=student.register_number if student else None,
+        examination_id=exam.id if exam else None,
+        exam_name=exam.name if exam else None,
+
     )
+
 
 
 def detect_and_create_review_case(

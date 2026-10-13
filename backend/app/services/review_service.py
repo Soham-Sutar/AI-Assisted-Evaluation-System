@@ -1,74 +1,182 @@
-"""Reviewer workflow: assign / resolve / escalate. Reviewer score (not AI) overrides faculty score for the answer."""
+"""Reviewer workflow service: assign, resolve, escalate.
+Reviewer score (not AI) overrides faculty score for the answer.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
+from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Evaluation, ReviewCase, ReviewStatus, Role, User
+from app.models.review_case import ReviewCase, ReviewStatus
+from app.models.evaluation import Evaluation
+from app.models.user import User, UserRole
+from app.models.answer import Answer
 from app.services.audit_service import log_action
-from app.services.evaluation_service import Conflict, NotFound, validate_marks
-from app.services.result_service import recalc_for_answer
+from app.services.scoring import calculate_student_score
 
 
-def _case(db: Session, case_id) -> ReviewCase:
+class ReviewError(Exception):
+    pass
+
+
+class ReviewNotFoundError(ReviewError):
+    pass
+
+
+class ReviewConflictError(ReviewError):
+    pass
+
+
+class ReviewValidationError(ReviewError):
+    pass
+
+
+def _case(db: Session, case_id: str) -> ReviewCase:
     c = db.get(ReviewCase, case_id)
     if c is None:
-        raise NotFound("Review case not found")
+        raise ReviewNotFoundError(f"Review case with ID '{case_id}' not found")
     return c
 
 
-def _conflict_of_interest(db: Session, case: ReviewCase, user: User) -> bool:
-    """A reviewer must not re-evaluate an answer they scored themselves (reviewers may also be faculty)."""
-    return db.scalar(select(Evaluation.id).where(Evaluation.answer_id == case.answer_id,
-                                                 Evaluation.faculty_id == user.id).limit(1)) is not None
+def check_conflict_of_interest(db: Session, case: ReviewCase, user: User) -> bool:
+    """A reviewer must not re-evaluate an answer they evaluated themselves as faculty."""
+    conflict_eval = db.scalar(
+        select(Evaluation.id)
+        .where(
+            Evaluation.answer_id == case.answer_id,
+            Evaluation.faculty_id == user.id,
+        )
+        .limit(1)
+    )
+    return conflict_eval is not None
 
 
-def assign_reviewer(db: Session, case_id, reviewer_id, actor: User) -> ReviewCase:
+def assign_reviewer(
+    db: Session,
+    case_id: str,
+    reviewer_id: str,
+    actor: User,
+) -> ReviewCase:
+    """Assign a review case to an eligible reviewer (or claim it)."""
     case = _case(db, case_id)
     reviewer = db.get(User, reviewer_id)
-    if reviewer is None or not reviewer.is_active or reviewer.role not in (Role.REVIEWER, Role.ADMIN):
-        raise Conflict("Target user cannot act as a reviewer")
+    if reviewer is None or not reviewer.is_active or reviewer.role not in (UserRole.REVIEWER, UserRole.ADMIN):
+        raise ReviewConflictError("Target user cannot act as a reviewer")
+
     if case.status == ReviewStatus.RESOLVED:
-        raise Conflict("Review case is already resolved")
-    if _conflict_of_interest(db, case, reviewer):
-        raise Conflict("Reviewer evaluated this answer and cannot review it")
-    case.reviewer_id, case.status = reviewer.id, ReviewStatus.ASSIGNED
-    log_action(db, actor.id, "review.assigned", "ReviewCase", case.id, {"reviewer": str(reviewer.id)})
+        raise ReviewConflictError("Review case is already resolved and cannot be reassigned")
+
+    if case.status == ReviewStatus.ASSIGNED and case.reviewer_id and case.reviewer_id != reviewer.id and actor.role != UserRole.ADMIN:
+        raise ReviewConflictError("Review case is already assigned to another reviewer")
+
+    if check_conflict_of_interest(db, case, reviewer):
+        raise ReviewConflictError("Reviewer evaluated this answer and cannot review it due to conflict of interest")
+
+    case.reviewer_id = reviewer.id
+    case.status = ReviewStatus.ASSIGNED
+    log_action(
+        db,
+        actor.id,
+        "review.assigned",
+        "ReviewCase",
+        case.id,
+        {"reviewer_id": str(reviewer.id), "assigned_by": str(actor.id)},
+    )
     db.commit()
+    db.refresh(case)
     return case
 
 
-def resolve(db: Session, case_id, marks: float, comments: str, user: User) -> ReviewCase:
+def resolve_case(
+    db: Session,
+    case_id: str,
+    marks: float,
+    comments: str,
+    actor: User,
+) -> ReviewCase:
+    """Resolve a review case with reviewer-awarded marks and required comments."""
     case = _case(db, case_id)
     if case.status == ReviewStatus.RESOLVED:
-        raise Conflict("Review case is already resolved")
-    if case.reviewer_id not in (None, user.id) and user.role != Role.ADMIN:
-        raise Conflict("Case is assigned to another reviewer")
-    if _conflict_of_interest(db, case, user):
-        raise Conflict("You evaluated this answer and cannot review it")
-    max_marks = case.answer.question.max_marks
-    marks = validate_marks(marks, max_marks, required=True)
+        raise ReviewConflictError("Review case is already resolved")
+
+    if case.reviewer_id not in (None, actor.id) and actor.role != UserRole.ADMIN:
+        raise ReviewConflictError("Case is assigned to another reviewer")
+
+    if check_conflict_of_interest(db, case, actor):
+        raise ReviewConflictError("You evaluated this answer and cannot review it due to conflict of interest")
+
+    question = case.answer.question if case.answer else None
+    max_marks = question.max_marks if question else 10.0
+
+    if marks < 0.0 or marks > max_marks:
+        raise ReviewValidationError(f"Reviewer marks must be between 0.0 and {max_marks}")
+
     if not (comments or "").strip():
-        raise ValueError("A review comment is required")
-    case.reviewer_id = case.reviewer_id or user.id
-    case.reviewer_marks, case.reviewer_comments = marks, comments.strip()
-    case.status, case.resolved_at = ReviewStatus.RESOLVED, datetime.now(timezone.utc)
-    log_action(db, user.id, "review.resolved", "ReviewCase", case.id,
-               {"marks": marks, "answer_id": str(case.answer_id)})
+        raise ReviewValidationError("Reviewer comments are required to resolve a review case")
+
+    case.reviewer_id = case.reviewer_id or actor.id
+    case.reviewer_marks = marks
+    case.reviewer_comments = comments.strip()
+    case.status = ReviewStatus.RESOLVED
+    case.resolved_at = datetime.now(timezone.utc)
+
+    # Persist answer-level final score
+    if case.answer:
+        case.answer.final_marks = marks
+        case.answer.final_marks_source = "REVIEWER"
+
+    log_action(
+        db,
+        actor.id,
+        "review.resolved",
+        "ReviewCase",
+        case.id,
+        {"marks": marks, "answer_id": str(case.answer_id)},
+    )
     db.commit()
-    recalc_for_answer(db, case.answer_id, user.id)
+    db.refresh(case)
+
+    # Recalculate student final score
+    if case.answer and case.answer.answer_sheet:
+        sheet = case.answer.answer_sheet
+        calculate_student_score(
+            db,
+            examination_id=sheet.examination_id,
+            student_id=sheet.student_id,
+            auto_commit=True,
+        )
+
     return case
 
 
-def escalate(db: Session, case_id, comments: str, user: User) -> ReviewCase:
+def escalate_case(
+    db: Session,
+    case_id: str,
+    comments: Optional[str],
+    actor: User,
+) -> ReviewCase:
+    """Escalate a review case for administrative / senior review."""
     case = _case(db, case_id)
     if case.status == ReviewStatus.RESOLVED:
-        raise Conflict("Review case is already resolved")
+        raise ReviewConflictError("Review case is already resolved and cannot be escalated")
+
+    if case.reviewer_id not in (None, actor.id) and actor.role != UserRole.ADMIN:
+        raise ReviewConflictError("Case is assigned to another reviewer")
+
     case.status = ReviewStatus.ESCALATED
-    case.reviewer_comments = (comments or "").strip() or case.reviewer_comments
-    case.reviewer_id = case.reviewer_id or user.id
-    log_action(db, user.id, "review.escalated", "ReviewCase", case.id, {})
+    if (comments or "").strip():
+        case.reviewer_comments = comments.strip()
+    case.reviewer_id = case.reviewer_id or actor.id
+
+    log_action(
+        db,
+        actor.id,
+        "review.escalated",
+        "ReviewCase",
+        case.id,
+        {"comments": comments},
+    )
     db.commit()
+    db.refresh(case)
     return case

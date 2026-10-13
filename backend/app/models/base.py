@@ -17,6 +17,7 @@ from app.models.review_case import (
     ReviewStatus,
     ReviewPriority,
 )
+from app.models.final_score import FinalScore, FinalScoreStatus
 
 __all__ = [
     "Base",
@@ -43,5 +44,8 @@ __all__ = [
     "ReviewTriggerType",
     "ReviewStatus",
     "ReviewPriority",
+    "FinalScore",
+    "FinalScoreStatus",
 ]
+
 

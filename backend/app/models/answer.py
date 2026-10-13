@@ -82,7 +82,16 @@ class Answer(Base):
         nullable=False,
         index=True,
     )
+    final_marks: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    final_marks_source: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
+
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,

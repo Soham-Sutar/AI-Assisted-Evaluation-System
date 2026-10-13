@@ -109,6 +109,12 @@ class Examination(Base):
         back_populates="examination",
         cascade="all, delete-orphan",
     )
+    final_scores: Mapped[List["FinalScore"]] = relationship(
+        "FinalScore",
+        back_populates="examination",
+        cascade="all, delete-orphan",
+    )
+
 
     def __repr__(self) -> str:
         return f"<Examination {self.name} ({self.academic_year} {self.semester}) [{self.status}]>"

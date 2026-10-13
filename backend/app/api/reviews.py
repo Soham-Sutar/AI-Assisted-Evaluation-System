@@ -18,12 +18,28 @@ from app.models.review_case import (
     ReviewStatus,
     ReviewPriority,
 )
-from app.schemas.review_case import ReviewCaseRead, DiscrepancyCheckResponse
+from app.schemas.review_case import (
+    ReviewCaseRead,
+    DiscrepancyCheckResponse,
+    ReviewAssignRequest,
+    ReviewResolveRequest,
+    ReviewEscalateRequest,
+)
 from app.services.discrepancy import (
     compute_discrepancy,
     detect_and_create_review_case,
     enrich_review_case,
 )
+from app.services.review_service import (
+    assign_reviewer,
+    resolve_case,
+    escalate_case,
+    ReviewError,
+    ReviewNotFoundError,
+    ReviewConflictError,
+    ReviewValidationError,
+)
+
 
 
 logger = logging.getLogger("evalai.api.reviews")
@@ -225,6 +241,8 @@ def list_review_cases(
     status: Optional[ReviewStatus] = None,
     trigger_type: Optional[ReviewTriggerType] = None,
     priority: Optional[ReviewPriority] = None,
+    reviewer_id: Optional[str] = None,
+    assigned_to_me: Optional[bool] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -233,6 +251,7 @@ def list_review_cases(
     """
     List review cases with pagination and optional filters.
     Restricted to ADMIN and REVIEWER roles.
+    Reviewers can only inspect unassigned cases or cases assigned to themselves.
     """
     stmt = select(ReviewCase)
     if status is not None:
@@ -241,6 +260,16 @@ def list_review_cases(
         stmt = stmt.where(ReviewCase.trigger_type == trigger_type)
     if priority is not None:
         stmt = stmt.where(ReviewCase.priority == priority)
+
+    if assigned_to_me is True:
+        stmt = stmt.where(ReviewCase.reviewer_id == current_user.id)
+    elif reviewer_id is not None:
+        if current_user.role == UserRole.REVIEWER and reviewer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Reviewers can only view their own assigned review cases",
+            )
+        stmt = stmt.where(ReviewCase.reviewer_id == reviewer_id)
 
     stmt = stmt.order_by(ReviewCase.created_at.desc()).offset(skip).limit(limit)
     cases = db.scalars(stmt).all()
@@ -255,7 +284,8 @@ def get_review_case(
 ):
     """
     Retrieve details of a single review case by ID.
-    - ADMIN and REVIEWER can access all review cases.
+    - ADMIN has unrestricted access.
+    - REVIEWER can only access cases that are unassigned or assigned to themselves.
     - FACULTY can only access if assigned to the underlying answer AND has already evaluated it.
     """
     case = db.get(ReviewCase, review_id)
@@ -267,10 +297,118 @@ def get_review_case(
 
     if current_user.role == UserRole.FACULTY:
         _check_faculty_can_access_answer_discrepancy(db, current_user, case.answer)
-    elif current_user.role not in [UserRole.ADMIN, UserRole.REVIEWER]:
+    elif current_user.role == UserRole.REVIEWER:
+        if case.reviewer_id is not None and case.reviewer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Review case is assigned to another reviewer",
+            )
+    elif current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions to access this review case",
         )
 
     return enrich_review_case(case)
+
+
+@router.post("/reviews/{review_id}/assign", response_model=ReviewCaseRead)
+def assign_review(
+    review_id: str,
+    payload: Optional[ReviewAssignRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.REVIEWER)),
+):
+    """
+    Assign a review case to an eligible reviewer, or claim it.
+    - ADMIN can assign to any active reviewer or admin.
+    - REVIEWER can only assign/claim the case for themselves.
+    - Checks conflict of interest (cannot review answers evaluated by oneself).
+    """
+    target_reviewer_id = (payload.reviewer_id if payload and payload.reviewer_id else current_user.id)
+    if current_user.role == UserRole.REVIEWER and target_reviewer_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reviewers can only assign review cases to themselves",
+        )
+
+    try:
+        case = assign_reviewer(db, review_id, target_reviewer_id, actor=current_user)
+        return enrich_review_case(case)
+    except ReviewNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ReviewConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ReviewValidationError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+
+@router.post("/reviews/{review_id}/claim", response_model=ReviewCaseRead)
+def claim_review(
+    review_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.REVIEWER)),
+):
+    """Claim a review case for the currently authenticated reviewer."""
+    return assign_review(
+        review_id=review_id,
+        payload=ReviewAssignRequest(reviewer_id=current_user.id),
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/reviews/{review_id}/resolve", response_model=ReviewCaseRead)
+def resolve_review(
+    review_id: str,
+    payload: ReviewResolveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.REVIEWER)),
+):
+    """
+    Resolve a review case with reviewer-awarded marks and required comments.
+    - Reviewer score overrides faculty score for the answer in final grade calculations.
+    - Marks must be between 0.0 and maximum marks.
+    - Conflict of interest check prevents faculty from re-evaluating their own answers.
+    - Recalculates final score for the affected student.
+    """
+    try:
+        case = resolve_case(
+            db,
+            case_id=review_id,
+            marks=payload.reviewer_marks,
+            comments=payload.reviewer_comments,
+            actor=current_user,
+        )
+        return enrich_review_case(case)
+    except ReviewNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ReviewConflictError as e:
+        if "assigned to another reviewer" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ReviewValidationError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+
+@router.post("/reviews/{review_id}/escalate", response_model=ReviewCaseRead)
+def escalate_review(
+    review_id: str,
+    payload: Optional[ReviewEscalateRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.REVIEWER)),
+):
+    """
+    Escalate a review case for senior faculty or administrator intervention.
+    """
+    comments = payload.comments if payload else None
+    try:
+        case = escalate_case(db, case_id=review_id, comments=comments, actor=current_user)
+        return enrich_review_case(case)
+    except ReviewNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ReviewConflictError as e:
+        if "assigned to another reviewer" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+

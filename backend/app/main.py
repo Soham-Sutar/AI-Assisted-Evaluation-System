@@ -52,6 +52,7 @@ from app.api.assignments import router as assignments_router
 from app.api.evaluations import router as evaluations_router
 from app.api.ai_evaluations import router as ai_evaluations_router
 from app.api.reviews import router as reviews_router
+from app.api.results import router as results_router
 
 # Include API Routers under /api
 app.include_router(auth_router, prefix=settings.API_V1_STR)
@@ -66,6 +67,8 @@ app.include_router(assignments_router, prefix=settings.API_V1_STR)
 app.include_router(evaluations_router, prefix=settings.API_V1_STR)
 app.include_router(ai_evaluations_router, prefix=settings.API_V1_STR)
 app.include_router(reviews_router, prefix=settings.API_V1_STR)
+app.include_router(results_router, prefix=settings.API_V1_STR)
+
 
 
 

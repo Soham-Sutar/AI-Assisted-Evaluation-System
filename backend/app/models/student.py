@@ -58,7 +58,13 @@ class Student(Base):
         "AnswerSheet",
         back_populates="student",
     )
+    final_scores: Mapped[List["FinalScore"]] = relationship(
+        "FinalScore",
+        back_populates="student",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
+
         return f"<Student {self.register_number}: {self.name}>"
 
