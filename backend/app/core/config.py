@@ -1,5 +1,5 @@
 import os
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "replace-with-a-development-secret"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+
+    # Demo Seed Passwords
+    ADMIN_SEED_PASSWORD: Optional[str] = None
+    FACULTY_SEED_PASSWORD: Optional[str] = None
+    REVIEWER_SEED_PASSWORD: Optional[str] = None
 
     # Storage
     STORAGE_PATH: str = "/app/storage"
@@ -79,6 +84,26 @@ class Settings(BaseSettings):
     @property
     def ai_keypoint_weight(self):
         return self.AI_KEYPOINT_WEIGHT
+
+    @property
+    def review_absolute_threshold(self) -> float:
+        return self.DISCREPANCY_ABSOLUTE_THRESHOLD
+
+    @property
+    def review_relative_threshold(self) -> float:
+        return self.DISCREPANCY_RELATIVE_THRESHOLD
+
+    @property
+    def review_mode(self) -> str:
+        return "either"
+
+    @property
+    def ai_low_confidence(self) -> float:
+        return 0.60
+
+    @property
+    def blind_evaluation(self) -> bool:
+        return False
 
 
 settings = Settings()

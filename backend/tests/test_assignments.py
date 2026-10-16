@@ -12,6 +12,8 @@ from app.models.examination import Examination, ExamStatus
 from app.models.question import Question
 from app.models.student import Student
 from app.models.assignment import AssignmentStatus, AssignmentType
+from app.models.answer import Answer, SegmentationStatus
+from app.models.answer_sheet import AnswerSheet, ProcessingStatus
 from app.core.security import create_access_token
 
 
@@ -346,3 +348,297 @@ def test_cancellation_authorization_and_transitions(
     get_res = client.get(f"/api/assignments/{assignment_id}", headers=admin_auth_headers)
     assert get_res.status_code == 200
     assert get_res.json()["status"] == AssignmentStatus.CANCELLED.value
+
+
+def test_auto_assign_unassigned_answers_regression(
+    client: TestClient,
+    admin_auth_headers: dict,
+    faculty_auth_headers: dict,
+    academic_setup: dict,
+):
+    """
+    Regression test for auto-assign HTTP 500 NameError on func.count:
+    1. Unauthenticated or faculty access rejected.
+    2. Invalid examination returns 404.
+    3. Uploads an answer sheet that creates unassigned answers.
+    4. Admin triggers POST /api/assignments/auto-assign.
+    5. Confirms 200 OK and workload counting with func.count succeeds without 500 error.
+    6. Verifies assignment is created and mapped to eligible faculty.
+    """
+    exam = academic_setup["examination"]
+    student = academic_setup["students"][0]
+    faculty = academic_setup["faculty"]
+
+    # 1. Non-admin forbidden
+    unauth_res = client.post("/api/assignments/auto-assign", json={"exam_id": exam.id})
+    assert unauth_res.status_code == 401
+
+    faculty_res = client.post(
+        "/api/assignments/auto-assign",
+        json={"exam_id": exam.id},
+        headers=faculty_auth_headers,
+    )
+    assert faculty_res.status_code == 403
+
+    # 2. Non-existent exam returns 404
+    not_found_res = client.post(
+        "/api/assignments/auto-assign",
+        json={"exam_id": "00000000-0000-0000-0000-000000000000"},
+        headers=admin_auth_headers,
+    )
+    assert not_found_res.status_code == 404
+
+    # 3. Create unassigned answer via upload
+    img_bytes = generate_synthetic_answer_sheet_png()
+    upload_res = client.post(
+        "/api/answer-sheets/",
+        data={"examination_id": exam.id, "student_id": student.id},
+        files={"file": ("auto_sheet.png", img_bytes, "image/png")},
+        headers=admin_auth_headers,
+    )
+    assert upload_res.status_code == 201
+    sheet_id = upload_res.json()["id"]
+    answers = upload_res.json()["answers"]
+    assert len(answers) >= 1
+    target_answer_id = answers[0]["id"]
+
+    # Verify that unapproved segments are safely held in unassigned status
+    if answers[0]["status"] == SegmentationStatus.NEEDS_REVIEW.value:
+        pre_res = client.post(
+            "/api/assignments/auto-assign",
+            json={"exam_id": exam.id},
+            headers=admin_auth_headers,
+        )
+        assert pre_res.status_code == 200
+        assert any(u["reason"] == "Segmentation requires review before assignment" for u in pre_res.json()["unassigned"])
+
+        # Approve the sheet segments so they become eligible for assignment
+        app_res = client.post(
+            f"/api/answer-sheets/{sheet_id}/approve-all",
+            json={"include_flagged": True},
+            headers=admin_auth_headers,
+        )
+        assert app_res.status_code == 200
+
+    # 4. Trigger auto-assign
+    auto_res = client.post(
+        "/api/assignments/auto-assign",
+        json={"exam_id": exam.id},
+        headers=admin_auth_headers,
+    )
+    assert auto_res.status_code == 200
+    data = auto_res.json()
+    assert "assigned" in data
+    assert data["assigned"] >= 1
+    assert data["unassigned"] == []
+
+    # 5. Verify the assignment in database via list endpoint
+    list_res = client.get(
+        f"/api/assignments/?answer_id={target_answer_id}",
+        headers=admin_auth_headers,
+    )
+    assert list_res.status_code == 200
+    assignments = list_res.json()
+    assert len(assignments) == 1
+    assert assignments[0]["faculty_id"] == faculty.id
+    assert assignments[0]["status"] == AssignmentStatus.ASSIGNED.value
+
+
+def test_question_wise_faculty_allocation_rules(
+    client: TestClient,
+    admin_auth_headers: dict,
+    academic_setup: dict,
+    db_session: Session,
+):
+    """
+    Test full suite of question-wise faculty allocation rules:
+    1. Every answer for Q1 across multiple students is assigned to the same faculty member.
+    2. Every answer for Q2 is assigned to the same faculty member.
+    3. Different questions can be assigned to different faculty members.
+    4. No question group is split across faculty members.
+    5. Ineligible faculty are excluded from auto-assignment.
+    6. Re-running auto-assignment is idempotent (no duplicate or redistributed assignments).
+    7. Answers for a previously assigned question inherit the question's assigned faculty.
+    8. Manual reassignment moves the entire question group together.
+    9. Manual creation conflicting with existing question assignment is rejected.
+    """
+    exam = academic_setup["examination"]
+    subject = academic_setup["subject"]
+    q1 = academic_setup["questions"][0]
+    st1, st2, st3 = academic_setup["students"]
+
+    # 1. Add Q2 to the exam
+    q2 = Question(
+        examination_id=exam.id,
+        question_number=2,
+        question_text="Explain Virtual Memory and Paging.",
+        max_marks=5.0,
+        model_answer_text="Paging, page tables, TLB, demand paging.",
+    )
+    db_session.add(q2)
+
+    # 2. Add second eligible faculty (eligible for this subject)
+    fac2 = User(
+        email="faculty2.test@example.com",
+        full_name="Dr. Faculty Two",
+        password_hash="fakehash",
+        role=UserRole.FACULTY,
+        is_active=True,
+    )
+    db_session.add(fac2)
+    db_session.flush()
+    db_session.add(FacultySubject(faculty_id=fac2.id, subject_id=subject.id))
+
+    # 3. Add an ineligible faculty (active faculty, but NOT mapped to this subject)
+    fac_ineligible = User(
+        email="faculty.ineligible@example.com",
+        full_name="Dr. Ineligible",
+        password_hash="fakehash",
+        role=UserRole.FACULTY,
+        is_active=True,
+    )
+    db_session.add(fac_ineligible)
+    db_session.flush()
+
+    # 4. Create AnswerSheets and Answers for Student 1 and Student 2
+    sheet1 = AnswerSheet(
+        examination_id=exam.id,
+        student_id=st1.id,
+        original_filename="st1.png",
+        original_file_path="storage/st1.png",
+        processing_status=ProcessingStatus.PROCESSED,
+    )
+    sheet2 = AnswerSheet(
+        examination_id=exam.id,
+        student_id=st2.id,
+        original_filename="st2.png",
+        original_file_path="storage/st2.png",
+        processing_status=ProcessingStatus.PROCESSED,
+    )
+    db_session.add_all([sheet1, sheet2])
+    db_session.flush()
+
+    ans1_q1 = Answer(answer_sheet_id=sheet1.id, question_id=q1.id, status=SegmentationStatus.VERIFIED)
+    ans1_q2 = Answer(answer_sheet_id=sheet1.id, question_id=q2.id, status=SegmentationStatus.VERIFIED)
+    ans2_q1 = Answer(answer_sheet_id=sheet2.id, question_id=q1.id, status=SegmentationStatus.VERIFIED)
+    ans2_q2 = Answer(answer_sheet_id=sheet2.id, question_id=q2.id, status=SegmentationStatus.VERIFIED)
+    db_session.add_all([ans1_q1, ans1_q2, ans2_q1, ans2_q2])
+    db_session.commit()
+
+    # 5. Run auto-assign
+    res = client.post("/api/assignments/auto-assign", json={"exam_id": exam.id}, headers=admin_auth_headers)
+    assert res.status_code == 200
+    assert res.json()["assigned"] == 4
+
+    # Fetch all assignments
+    list_res = client.get(f"/api/assignments/?exam_id={exam.id}", headers=admin_auth_headers)
+    assert list_res.status_code == 200
+    assignments = list_res.json()
+    assert len(assignments) == 4
+
+    # Group by question number
+    q1_assignments = [a for a in assignments if a["question_number"] == 1]
+    q2_assignments = [a for a in assignments if a["question_number"] == 2]
+
+    assert len(q1_assignments) == 2
+    assert len(q2_assignments) == 2
+
+    # Check 1 & 2: All Q1 assigned to SAME faculty, all Q2 assigned to SAME faculty
+    q1_fac_ids = {a["faculty_id"] for a in q1_assignments}
+    q2_fac_ids = {a["faculty_id"] for a in q2_assignments}
+    assert len(q1_fac_ids) == 1, "All Q1 answers must be assigned to the exact same faculty member"
+    assert len(q2_fac_ids) == 1, "All Q2 answers must be assigned to the exact same faculty member"
+
+    q1_fac = list(q1_fac_ids)[0]
+    q2_fac = list(q2_fac_ids)[0]
+
+    # Check 3: Different questions assigned to different faculty members
+    assert q1_fac != q2_fac, "Q1 and Q2 should be balanced across the two available eligible faculty members"
+
+    # Check 4: Ineligible faculty excluded
+    assert fac_ineligible.id not in q1_fac_ids
+    assert fac_ineligible.id not in q2_fac_ids
+
+    # Check 5: Idempotency - running auto-assign again creates 0 new assignments and does not alter existing
+    res2 = client.post("/api/assignments/auto-assign", json={"exam_id": exam.id}, headers=admin_auth_headers)
+    assert res2.status_code == 200
+    assert res2.json()["assigned"] == 0
+
+    # Check 6: When student 3 adds answers later, they inherit the established question mapping
+    sheet3 = AnswerSheet(
+        examination_id=exam.id,
+        student_id=st3.id,
+        original_filename="st3.png",
+        original_file_path="storage/st3.png",
+        processing_status=ProcessingStatus.PROCESSED,
+    )
+    db_session.add(sheet3)
+    db_session.flush()
+    ans3_q1 = Answer(answer_sheet_id=sheet3.id, question_id=q1.id, status=SegmentationStatus.VERIFIED)
+    ans3_q2 = Answer(answer_sheet_id=sheet3.id, question_id=q2.id, status=SegmentationStatus.VERIFIED)
+    db_session.add_all([ans3_q1, ans3_q2])
+    db_session.commit()
+
+    res3 = client.post("/api/assignments/auto-assign", json={"exam_id": exam.id}, headers=admin_auth_headers)
+    assert res3.status_code == 200
+    assert res3.json()["assigned"] == 2
+
+    list_res3 = client.get(f"/api/assignments/?exam_id={exam.id}", headers=admin_auth_headers)
+    assignments3 = list_res3.json()
+    assert len(assignments3) == 6
+
+    q1_all = [a for a in assignments3 if a["question_number"] == 1 and a["status"] == AssignmentStatus.ASSIGNED.value]
+    q2_all = [a for a in assignments3 if a["question_number"] == 2 and a["status"] == AssignmentStatus.ASSIGNED.value]
+    assert len(q1_all) == 3
+    assert len(q2_all) == 3
+    assert all(a["faculty_id"] == q1_fac for a in q1_all), "All 3 students' Q1 answers must belong to q1_fac"
+    assert all(a["faculty_id"] == q2_fac for a in q2_all), "All 3 students' Q2 answers must belong to q2_fac"
+
+    # Check 7: Manual single assignment conflicting with question-wise rule is rejected
+    # Create an extra answer for Q1 with a new student st4
+    st4 = Student(
+        register_number="CS2026004",
+        name="Diana Student",
+        division="A",
+        email="diana@example.com",
+    )
+    db_session.add(st4)
+    db_session.flush()
+
+    sheet4 = AnswerSheet(
+        examination_id=exam.id,
+        student_id=st4.id,
+        original_filename="st4.png",
+        original_file_path="storage/st4.png",
+        processing_status=ProcessingStatus.PROCESSED,
+    )
+    db_session.add(sheet4)
+    db_session.flush()
+    ans4_q1 = Answer(answer_sheet_id=sheet4.id, question_id=q1.id, status=SegmentationStatus.VERIFIED)
+    db_session.add(ans4_q1)
+    db_session.commit()
+
+    conflict_create = client.post(
+        "/api/assignments/",
+        json={"answer_id": ans4_q1.id, "faculty_id": q2_fac, "assignment_type": AssignmentType.PRIMARY.value},
+        headers=admin_auth_headers,
+    )
+    assert conflict_create.status_code == 400
+    assert "Question-wise faculty allocation requires" in conflict_create.json()["detail"]
+
+    # Check 8: Manual reassignment of one Q1 answer moves the ENTIRE Q1 question group to the new faculty
+    target_q1_assignment = q1_all[0]
+    reassign_res = client.post(
+        f"/api/assignments/{target_q1_assignment['id']}/reassign",
+        json={"faculty_id": q2_fac},
+        headers=admin_auth_headers,
+    )
+    assert reassign_res.status_code == 200
+
+    # Verify that all active Q1 assignments are now mapped to q2_fac (none remain active under q1_fac)
+    list_after = client.get(f"/api/assignments/?exam_id={exam.id}&question_number=1", headers=admin_auth_headers)
+    q1_active = [a for a in list_after.json() if a["status"] == AssignmentStatus.ASSIGNED.value]
+    assert len(q1_active) >= 3
+    assert all(a["faculty_id"] == q2_fac for a in q1_active), "All Q1 answers must now be reassigned to q2_fac together"
+
+

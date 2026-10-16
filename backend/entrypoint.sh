@@ -15,4 +15,4 @@ sys.exit("database not reachable")
 PY
 alembic upgrade head
 if [ "$SEED_ON_START" = "true" ]; then python -m scripts.seed --sheets; fi
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

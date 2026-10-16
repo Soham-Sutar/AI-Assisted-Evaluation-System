@@ -35,3 +35,7 @@ class ExaminationRead(ExaminationBase):
     updated_at: datetime
     subject_name: Optional[str] = None
     subject_code: Optional[str] = None
+    question_count: int = 0
+    sheet_count: int = 0
+    answer_count: int = 0
+

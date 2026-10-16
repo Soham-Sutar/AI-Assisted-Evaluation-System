@@ -53,21 +53,35 @@ from app.api.evaluations import router as evaluations_router
 from app.api.ai_evaluations import router as ai_evaluations_router
 from app.api.reviews import router as reviews_router
 from app.api.results import router as results_router
+from app.api.questions import top_level_questions_router
+from app.api.answer_sheets import answer_pages_router
+from app.api.faculty import router as faculty_router
+from app.api.analytics import router as analytics_router
+from app.api.settings import router as settings_router
+from app.api.audit_logs import router as audit_logs_router
 
 # Include API Routers under /api
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(subjects_router, prefix=settings.API_V1_STR)
 app.include_router(faculty_subjects_router, prefix=settings.API_V1_STR)
-app.include_router(examinations_router, prefix=settings.API_V1_STR)
-app.include_router(questions_router, prefix=settings.API_V1_STR)
+app.include_router(examinations_router, prefix=f"{settings.API_V1_STR}/examinations")
+app.include_router(examinations_router, prefix=f"{settings.API_V1_STR}/exams")
+app.include_router(questions_router, prefix=f"{settings.API_V1_STR}/examinations/{{examination_id}}/questions")
+app.include_router(questions_router, prefix=f"{settings.API_V1_STR}/exams/{{examination_id}}/questions")
+app.include_router(top_level_questions_router, prefix=settings.API_V1_STR)
 app.include_router(students_router, prefix=settings.API_V1_STR)
 app.include_router(answer_sheets_router, prefix=settings.API_V1_STR)
+app.include_router(answer_pages_router, prefix=settings.API_V1_STR)
 app.include_router(answers_router, prefix=settings.API_V1_STR)
 app.include_router(assignments_router, prefix=settings.API_V1_STR)
 app.include_router(evaluations_router, prefix=settings.API_V1_STR)
 app.include_router(ai_evaluations_router, prefix=settings.API_V1_STR)
 app.include_router(reviews_router, prefix=settings.API_V1_STR)
 app.include_router(results_router, prefix=settings.API_V1_STR)
+app.include_router(faculty_router, prefix=settings.API_V1_STR)
+app.include_router(analytics_router, prefix=settings.API_V1_STR)
+app.include_router(settings_router, prefix=settings.API_V1_STR)
+app.include_router(audit_logs_router, prefix=settings.API_V1_STR)
 
 
 

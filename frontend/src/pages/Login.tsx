@@ -26,6 +26,16 @@ export default function Login() {
       <Field label="Email" error={errors.email?.message}><Input type="email" autoComplete="username" {...register("email")} /></Field>
       <Field label="Password" error={errors.password?.message}><Input type="password" autoComplete="current-password" {...register("password")} /></Field>
       <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? "Signing in…" : "Sign in"}</Button>
-      <p className="text-center text-xs text-slate-400">Development accounts are listed in the README.</p>
+      <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 space-y-1">
+        <p className="font-semibold text-slate-700">Development Accounts</p>
+        <p className="text-slate-500 text-[11px]">
+          Configured in <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-800">.env</code> (details in README):
+        </p>
+        <ul className="list-disc list-inside text-[11px] text-slate-600 space-y-0.5 font-mono">
+          <li>admin@example.com (Admin)</li>
+          <li>faculty1@example.com (Faculty)</li>
+          <li>reviewer@example.com (Reviewer)</li>
+        </ul>
+      </div>
     </form></div>;
 }

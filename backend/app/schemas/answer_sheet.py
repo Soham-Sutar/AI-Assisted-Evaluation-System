@@ -16,20 +16,24 @@ class AnswerSheetRead(BaseModel):
 
     id: str
     examination_id: str
-    student_id: str
+    student_id: Optional[str] = None
     original_filename: str
     page_count: int
     processing_status: ProcessingStatus
     error_message: Optional[str] = None
+    processing_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     examination_name: Optional[str] = None
     student_name: Optional[str] = None
     student_register_number: Optional[str] = None
+    register_number: Optional[str] = None
     page_count_actual: Optional[int] = None
-    answer_count: Optional[int] = None
+    answer_count: Optional[int] = 0
+    flagged_count: Optional[int] = 0
 
 
 class AnswerSheetDetailRead(AnswerSheetRead):
     pages: List[AnswerPageRead] = []
     answers: List[AnswerRead] = []
+

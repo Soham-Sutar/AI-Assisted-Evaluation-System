@@ -13,7 +13,8 @@ from app.schemas.faculty_subject import FacultySubjectCreate, FacultySubjectRead
 router = APIRouter(prefix="/faculty-subjects", tags=["Faculty Subjects"])
 
 
-@router.post("/", response_model=FacultySubjectRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=FacultySubjectRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=FacultySubjectRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def assign_faculty_to_subject(
     payload: FacultySubjectCreate,
     db: Session = Depends(get_db),
@@ -72,7 +73,8 @@ def assign_faculty_to_subject(
     )
 
 
-@router.get("/", response_model=List[FacultySubjectRead])
+@router.get("", response_model=List[FacultySubjectRead])
+@router.get("/", response_model=List[FacultySubjectRead], include_in_schema=False)
 def list_faculty_subjects(
     faculty_id: Optional[str] = Query(None, description="Filter by faculty ID"),
     subject_id: Optional[str] = Query(None, description="Filter by subject ID"),

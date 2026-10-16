@@ -10,10 +10,34 @@ from app.models.subject import Subject
 from app.models.examination import Examination, ExamStatus
 from app.schemas.examination import ExaminationCreate, ExaminationUpdate, ExaminationRead
 
-router = APIRouter(prefix="/examinations", tags=["Examinations"])
+router = APIRouter(tags=["Examinations"])
 
 
-@router.post("/", response_model=ExaminationRead, status_code=status.HTTP_201_CREATED)
+def _enrich_exam_read(exam: Examination, subj: Subject) -> ExaminationRead:
+    q_count = len(exam.questions) if exam.questions else 0
+    sheet_count = len(exam.answer_sheets) if exam.answer_sheets else 0
+    answer_count = sum(len(s.answers) for s in exam.answer_sheets) if exam.answer_sheets else 0
+    return ExaminationRead(
+        id=exam.id,
+        subject_id=exam.subject_id,
+        name=exam.name,
+        academic_year=exam.academic_year,
+        semester=exam.semester,
+        exam_date=exam.exam_date,
+        total_marks=exam.total_marks,
+        status=exam.status,
+        created_at=exam.created_at,
+        updated_at=exam.updated_at,
+        subject_name=subj.name,
+        subject_code=subj.code,
+        question_count=q_count,
+        sheet_count=sheet_count,
+        answer_count=answer_count,
+    )
+
+
+@router.post("", response_model=ExaminationRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=ExaminationRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_examination(
     payload: ExaminationCreate,
     db: Session = Depends(get_db),
@@ -53,23 +77,12 @@ def create_examination(
     db.commit()
     db.refresh(exam)
 
-    return ExaminationRead(
-        id=exam.id,
-        subject_id=exam.subject_id,
-        name=exam.name,
-        academic_year=exam.academic_year,
-        semester=exam.semester,
-        exam_date=exam.exam_date,
-        total_marks=exam.total_marks,
-        status=exam.status,
-        created_at=exam.created_at,
-        updated_at=exam.updated_at,
-        subject_name=subject.name,
-        subject_code=subject.code,
-    )
+    return _enrich_exam_read(exam, subject)
 
 
-@router.get("/", response_model=List[ExaminationRead])
+
+@router.get("", response_model=List[ExaminationRead])
+@router.get("/", response_model=List[ExaminationRead], include_in_schema=False)
 def list_examinations(
     subject_id: Optional[str] = Query(None, description="Filter by subject ID"),
     status_filter: Optional[ExamStatus] = Query(None, alias="status", description="Filter by exam status"),
@@ -96,22 +109,7 @@ def list_examinations(
 
     output: List[ExaminationRead] = []
     for exam, subj in results:
-        output.append(
-            ExaminationRead(
-                id=exam.id,
-                subject_id=exam.subject_id,
-                name=exam.name,
-                academic_year=exam.academic_year,
-                semester=exam.semester,
-                exam_date=exam.exam_date,
-                total_marks=exam.total_marks,
-                status=exam.status,
-                created_at=exam.created_at,
-                updated_at=exam.updated_at,
-                subject_name=subj.name,
-                subject_code=subj.code,
-            )
-        )
+        output.append(_enrich_exam_read(exam, subj))
     return output
 
 
@@ -132,20 +130,7 @@ def get_examination(
             detail=f"Examination with ID '{examination_id}' not found.",
         )
     exam, subj = result
-    return ExaminationRead(
-        id=exam.id,
-        subject_id=exam.subject_id,
-        name=exam.name,
-        academic_year=exam.academic_year,
-        semester=exam.semester,
-        exam_date=exam.exam_date,
-        total_marks=exam.total_marks,
-        status=exam.status,
-        created_at=exam.created_at,
-        updated_at=exam.updated_at,
-        subject_name=subj.name,
-        subject_code=subj.code,
-    )
+    return _enrich_exam_read(exam, subj)
 
 
 @router.put("/{examination_id}", response_model=ExaminationRead)
@@ -183,20 +168,8 @@ def update_examination(
     db.commit()
     db.refresh(exam)
 
-    return ExaminationRead(
-        id=exam.id,
-        subject_id=exam.subject_id,
-        name=exam.name,
-        academic_year=exam.academic_year,
-        semester=exam.semester,
-        exam_date=exam.exam_date,
-        total_marks=exam.total_marks,
-        status=exam.status,
-        created_at=exam.created_at,
-        updated_at=exam.updated_at,
-        subject_name=subj.name,
-        subject_code=subj.code,
-    )
+    return _enrich_exam_read(exam, subj)
+
 
 
 @router.delete("/{examination_id}", status_code=status.HTTP_204_NO_CONTENT)

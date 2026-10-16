@@ -10,10 +10,11 @@ from app.models.examination import Examination
 from app.models.question import Question
 from app.schemas.question import QuestionCreate, QuestionUpdate, QuestionRead
 
-router = APIRouter(prefix="/examinations/{examination_id}/questions", tags=["Questions"])
+router = APIRouter(tags=["Questions"])
 
 
-@router.post("/", response_model=QuestionRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=QuestionRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=QuestionRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_question(
     examination_id: str,
     payload: QuestionCreate,
@@ -53,7 +54,8 @@ def create_question(
     return question
 
 
-@router.get("/", response_model=List[QuestionRead])
+@router.get("", response_model=List[QuestionRead])
+@router.get("/", response_model=List[QuestionRead], include_in_schema=False)
 def list_questions(
     examination_id: str,
     db: Session = Depends(get_db),
@@ -165,3 +167,69 @@ def delete_question(
     db.delete(question)
     db.commit()
     return None
+
+
+top_level_questions_router = APIRouter(prefix="/questions", tags=["Questions"])
+
+
+@top_level_questions_router.get("/{question_id}", response_model=QuestionRead)
+def get_question_direct(
+    question_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FACULTY)),
+) -> QuestionRead:
+    question = db.get(Question, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail=f"Question with ID '{question_id}' not found")
+    return question
+
+
+@top_level_questions_router.put("/{question_id}", response_model=QuestionRead)
+def update_question_direct(
+    question_id: str,
+    payload: QuestionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+) -> QuestionRead:
+    question = db.get(Question, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail=f"Question with ID '{question_id}' not found")
+    if payload.question_number is not None and payload.question_number != question.question_number:
+        existing = db.scalars(
+            select(Question).where(
+                Question.examination_id == question.examination_id,
+                Question.question_number == payload.question_number,
+                Question.id != question_id,
+            )
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Question number {payload.question_number} already exists")
+        question.question_number = payload.question_number
+
+    if payload.question_text is not None:
+        question.question_text = payload.question_text.strip()
+    if payload.max_marks is not None:
+        question.max_marks = payload.max_marks
+    if payload.model_answer_text is not None:
+        question.model_answer_text = payload.model_answer_text.strip() if payload.model_answer_text else None
+    if payload.rubric_json is not None:
+        question.rubric_json = payload.rubric_json
+
+    db.commit()
+    db.refresh(question)
+    return question
+
+
+@top_level_questions_router.delete("/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_question_direct(
+    question_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    question = db.get(Question, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail=f"Question with ID '{question_id}' not found")
+    db.delete(question)
+    db.commit()
+    return None
+

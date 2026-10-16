@@ -237,6 +237,7 @@ def get_answer_discrepancy(
 # --- Review Case Endpoints ---
 
 @router.get("/reviews", response_model=List[ReviewCaseRead])
+@router.get("/reviews/", response_model=List[ReviewCaseRead], include_in_schema=False)
 def list_review_cases(
     status: Optional[ReviewStatus] = None,
     trigger_type: Optional[ReviewTriggerType] = None,

@@ -13,7 +13,8 @@ from app.schemas.subject import SubjectCreate, SubjectUpdate, SubjectRead
 router = APIRouter(prefix="/subjects", tags=["Subjects"])
 
 
-@router.post("/", response_model=SubjectRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SubjectRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=SubjectRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_subject(
     payload: SubjectCreate,
     db: Session = Depends(get_db),
@@ -39,7 +40,8 @@ def create_subject(
     return subject
 
 
-@router.get("/", response_model=List[SubjectRead])
+@router.get("", response_model=List[SubjectRead])
+@router.get("/", response_model=List[SubjectRead], include_in_schema=False)
 def list_subjects(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),

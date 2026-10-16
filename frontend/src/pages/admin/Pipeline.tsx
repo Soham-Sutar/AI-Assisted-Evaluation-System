@@ -147,7 +147,8 @@ export function Assignments() {
       {list.isLoading ? <Spinner /> : list.error ? <ErrorBox error={list.error} /> : !list.data?.length ? <Empty title="No assignments yet" /> :
         <Table head={["Student", "Q", "Faculty", "Status", "Assigned", ""]}>{list.data.map((a) => <tr key={a.id}><Td>{a.register_number}</Td><Td>Q{a.question_number}</Td><Td>{a.faculty_name}</Td><Td><Badge>{a.status}</Badge></Td>
           <Td>{new Date(a.assigned_at).toLocaleString()}</Td><Td>{(a.status === "ASSIGNED" || a.status === "IN_PROGRESS") && <Button variant="ghost" onClick={() => setReassign(a)}>Reassign</Button>}</Td></tr>)}</Table>}</Card>
-    {reassign && <Modal title={`Reassign Q${reassign.question_number} (${reassign.register_number})`} onClose={() => setReassign(null)}>
+    {reassign && <Modal title={`Reassign Question ${reassign.question_number} (all students)`} onClose={() => setReassign(null)}>
+      <p className="mb-3 text-xs text-slate-500">All answers for Question {reassign.question_number} in this examination will be reassigned to the selected faculty member to ensure question-wise consistency.</p>
       <Select value={target} onChange={(e) => setTarget(e.target.value)}><option value="">Automatic (lowest workload)</option>{faculty.data?.filter((f) => f.id !== reassign.faculty_id).map((f) => <option key={f.id} value={f.id}>{f.full_name} ({f.current_assignment_count}/{f.max_active_assignments})</option>)}</Select>
       {re.error && <div className="mt-2"><ErrorBox error={re.error} /></div>}
       <div className="mt-4 flex justify-end gap-2"><Button variant="secondary" onClick={() => setReassign(null)}>Cancel</Button><Button disabled={re.isPending} onClick={() => re.mutate()}>Reassign</Button></div></Modal>}

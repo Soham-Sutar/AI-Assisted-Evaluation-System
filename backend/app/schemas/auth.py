@@ -20,7 +20,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UserRegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    role: UserRole = UserRole.FACULTY
+    max_active_assignments: int = 40
+    subject_ids: list[str] = []
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserRead
+

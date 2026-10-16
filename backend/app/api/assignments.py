@@ -1,14 +1,14 @@
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 
 from app.core.database import get_db
 from app.api.deps import get_current_active_user, require_roles
 from app.models.user import User, UserRole
 from app.models.assignment import Assignment, AssignmentStatus, AssignmentType
-from app.models.answer import Answer
+from app.models.answer import Answer, SegmentationStatus
 from app.models.answer_sheet import AnswerSheet
 from app.models.question import Question
 from app.models.examination import Examination
@@ -115,7 +115,8 @@ def _verify_faculty_eligible(db: Session, faculty_id: str, answer: Answer) -> Us
 # ADMIN ENDPOINTS
 # ---------------------------------------------------------------------------
 
-@router.post("/", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=AssignmentRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_assignment(
     payload: AssignmentCreate,
     db: Session = Depends(get_db),
@@ -153,6 +154,29 @@ def create_assignment(
             ),
         )
 
+    # Question-wise allocation check: ensure this question is not already assigned to another faculty
+    question = answer.question
+    if question:
+        conflicting = db.scalars(
+            select(Assignment)
+            .join(Answer, Answer.id == Assignment.answer_id)
+            .where(
+                Answer.question_id == question.id,
+                Assignment.faculty_id != payload.faculty_id,
+                Assignment.status.in_([AssignmentStatus.ASSIGNED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED]),
+            )
+        ).first()
+        if conflicting:
+            fac_name = conflicting.faculty.full_name if conflicting.faculty else conflicting.faculty_id
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Question {question.question_number} is already assigned to {fac_name}. "
+                    f"Question-wise faculty allocation requires all answers for Question "
+                    f"{question.question_number} to be assigned to the same faculty member."
+                ),
+            )
+
     assignment = Assignment(
         answer_id=payload.answer_id,
         faculty_id=payload.faculty_id,
@@ -172,10 +196,25 @@ def create_assignment(
     return _enrich_assignment(assignment)
 
 
-@router.get("/", response_model=List[AssignmentRead])
+from pydantic import BaseModel
+from app.services import analytics_service
+
+
+class AutoAssignPayload(BaseModel):
+    exam_id: str
+
+
+class ReassignPayload(BaseModel):
+    faculty_id: Optional[str] = None
+
+
+@router.get("", response_model=List[AssignmentRead])
+@router.get("/", response_model=List[AssignmentRead], include_in_schema=False)
 def list_assignments(
     faculty_id: Optional[str] = Query(None, description="Filter by faculty ID"),
     answer_id: Optional[str] = Query(None, description="Filter by answer ID"),
+    exam_id: Optional[str] = Query(None, description="Filter by examination ID"),
+    question_number: Optional[int] = Query(None, description="Filter by question number"),
     assignment_status: Optional[AssignmentStatus] = Query(None, alias="status"),
     assignment_type: Optional[AssignmentType] = Query(None, alias="type"),
     db: Session = Depends(get_db),
@@ -196,7 +235,332 @@ def list_assignments(
         query = query.where(and_(*conditions))
     query = query.order_by(Assignment.assigned_at.desc())
     assignments = db.scalars(query).all()
+
+    # In-memory filter for exam_id and question_number if provided
+    if exam_id or question_number:
+        filtered = []
+        for a in assignments:
+            q = a.answer.question if a.answer else None
+            if exam_id and (not q or q.examination_id != exam_id):
+                continue
+            if question_number and (not q or q.question_number != question_number):
+                continue
+            filtered.append(a)
+        assignments = filtered
+
     return [_enrich_assignment(a) for a in assignments]
+
+
+@router.get("/workload")
+def get_faculty_workload(
+    exam_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Admin: Retrieve faculty workload statistics."""
+    return analytics_service.faculty_workload(db, exam_id)
+
+
+@router.get("/unassigned")
+def get_unassigned_answers(
+    exam_id: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Admin: List answers awaiting evaluation assignment."""
+    assigned_subquery = select(Assignment.answer_id).where(
+        Assignment.status.in_([AssignmentStatus.ASSIGNED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED])
+    )
+    unassigned = db.scalars(
+        select(Answer)
+        .join(Question, Question.id == Answer.question_id)
+        .where(
+            Question.examination_id == exam_id,
+            Answer.id.not_in(assigned_subquery),
+        )
+        .order_by(Question.question_number)
+    ).all()
+
+    out = []
+    for a in unassigned:
+        sheet = a.answer_sheet
+        reg = sheet.student.register_number if (sheet and sheet.student) else "Unmapped"
+        qn = a.question.question_number if a.question else 0
+        reason = "Not yet assigned"
+        if a.status == SegmentationStatus.NEEDS_REVIEW:
+            reason = "Segmentation requires review"
+        out.append({
+            "answer_id": a.id,
+            "register_number": reg,
+            "question_number": qn,
+            "reason": reason,
+        })
+    return out
+
+
+@router.post("/auto-assign")
+def run_auto_assign(
+    payload: AutoAssignPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """
+    Admin: Automatically assign unassigned answers to eligible faculty
+    using question-wise faculty allocation.
+
+    Rules:
+    - Each question number in the exam is allocated to exactly one eligible faculty member.
+    - All answers for Q1 go to the faculty member for Q1; all answers for Q2 go to faculty for Q2, etc.
+    - No question group is split across multiple faculty members.
+    - Allocation across questions is deterministic and reasonably balanced.
+    - If a question is already partially assigned, any new/unassigned answers for that question
+      inherit the existing faculty assignment.
+    - Unapproved segments (status=NEEDS_REVIEW) or unmapped questions are not assigned and reported.
+    - Repeated runs are idempotent.
+    """
+    exam = db.get(Examination, payload.exam_id)
+    if not exam:
+        raise HTTPException(status_code=404, detail="Examination not found")
+
+    # 1. Fetch eligible faculty for this subject, deterministically ordered
+    eligible_faculty = db.scalars(
+        select(User)
+        .join(FacultySubject, FacultySubject.faculty_id == User.id)
+        .where(
+            User.role == UserRole.FACULTY,
+            User.is_active.is_(True),
+            FacultySubject.subject_id == exam.subject_id,
+        )
+        .order_by(User.full_name, User.id)
+    ).all()
+
+    if not eligible_faculty:
+        return {
+            "assigned": 0,
+            "unassigned": [],
+            "skipped_faculty": [{"faculty": "None", "reason": "No faculty eligible for this subject"}],
+            "message": "No eligible faculty available for subject",
+        }
+
+    eligible_ids = {f.id for f in eligible_faculty}
+
+    # 2. Find existing question -> faculty mapping in this examination
+    # (If Q1 was already assigned to Faculty A in a previous run/upload, keep Q1 -> Faculty A)
+    existing_assignments = db.scalars(
+        select(Assignment)
+        .join(Answer, Answer.id == Assignment.answer_id)
+        .join(Question, Question.id == Answer.question_id)
+        .where(
+            Question.examination_id == payload.exam_id,
+            Assignment.status.in_([AssignmentStatus.ASSIGNED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED]),
+        )
+        .order_by(Assignment.assigned_at.asc())
+    ).all()
+
+    question_faculty_map: Dict[int, str] = {}
+    for a in existing_assignments:
+        if a.answer and a.answer.question:
+            qn = a.answer.question.question_number
+            if qn not in question_faculty_map and a.faculty_id in eligible_ids:
+                question_faculty_map[qn] = a.faculty_id
+
+    # 3. Retrieve all defined questions for this exam
+    exam_questions = db.scalars(
+        select(Question)
+        .where(Question.examination_id == payload.exam_id)
+        .order_by(Question.question_number)
+    ).all()
+
+    # 4. Count questions already assigned to each faculty in this exam
+    faculty_question_count: Dict[str, int] = {f.id: 0 for f in eligible_faculty}
+    for qn, fid in question_faculty_map.items():
+        if fid in faculty_question_count:
+            faculty_question_count[fid] += 1
+
+    # Overall system workload for tie-breaking
+    faculty_overall_workload: Dict[str, int] = {}
+    for f in eligible_faculty:
+        load = db.scalar(
+            select(func.count(Assignment.id)).where(
+                Assignment.faculty_id == f.id,
+                Assignment.status.in_([AssignmentStatus.ASSIGNED, AssignmentStatus.IN_PROGRESS]),
+            )
+        ) or 0
+        faculty_overall_workload[f.id] = load
+
+    # 5. For any question not yet mapped to a faculty member, allocate one
+    for q in exam_questions:
+        if q.question_number in question_faculty_map:
+            continue
+        # Pick eligible faculty with lowest question count in this exam,
+        # then lowest overall workload, then alphabetical order
+        sorted_candidates = sorted(
+            eligible_faculty,
+            key=lambda f: (
+                faculty_question_count[f.id],
+                faculty_overall_workload[f.id],
+                f.full_name or "",
+                f.id,
+            )
+        )
+        chosen = sorted_candidates[0]
+        question_faculty_map[q.question_number] = chosen.id
+        faculty_question_count[chosen.id] += 1
+
+    # 6. Retrieve all unassigned answers for this examination
+    assigned_subquery = select(Assignment.answer_id).where(
+        Assignment.status.in_([AssignmentStatus.ASSIGNED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED])
+    )
+    unassigned_answers = db.scalars(
+        select(Answer)
+        .join(Question, Question.id == Answer.question_id)
+        .where(
+            Question.examination_id == payload.exam_id,
+            Answer.id.not_in(assigned_subquery),
+        )
+        .order_by(Question.question_number, Answer.id)
+    ).all()
+
+    assigned_count = 0
+    unassigned_list = []
+
+    for ans in unassigned_answers:
+        # Check segmentation review status
+        if ans.status == SegmentationStatus.NEEDS_REVIEW:
+            unassigned_list.append({
+                "answer_id": ans.id,
+                "question_number": ans.question.question_number if ans.question else 0,
+                "reason": "Segmentation requires review before assignment",
+            })
+            continue
+
+        qn = ans.question.question_number if ans.question else None
+        target_faculty_id = question_faculty_map.get(qn) if qn is not None else None
+
+        if not target_faculty_id:
+            unassigned_list.append({
+                "answer_id": ans.id,
+                "question_number": qn or 0,
+                "reason": "No eligible faculty available for this question",
+            })
+            continue
+
+        assignment = Assignment(
+            answer_id=ans.id,
+            faculty_id=target_faculty_id,
+            assignment_type=AssignmentType.PRIMARY,
+            status=AssignmentStatus.ASSIGNED,
+        )
+        db.add(assignment)
+        assigned_count += 1
+
+    db.commit()
+    return {
+        "assigned": assigned_count,
+        "unassigned": unassigned_list,
+        "skipped_faculty": [],
+    }
+
+
+def _reassign_question_group(
+    db: Session,
+    question_id: str,
+    target_faculty_id: str,
+    current_assignment_id: Optional[str] = None,
+) -> AssignmentRead:
+    """
+    Reassign all active assignments for a question to target_faculty_id,
+    preserving question-wise faculty allocation.
+    """
+    question_assignments = db.scalars(
+        select(Assignment)
+        .join(Answer, Answer.id == Assignment.answer_id)
+        .where(
+            Answer.question_id == question_id,
+            Assignment.status.in_(list(_ACTIVE_STATUSES)),
+        )
+    ).all()
+
+    target_returned = None
+    for a in question_assignments:
+        if a.faculty_id == target_faculty_id:
+            if current_assignment_id and a.id == current_assignment_id:
+                target_returned = a
+            continue
+
+        a.status = AssignmentStatus.REASSIGNED
+        new_a = Assignment(
+            answer_id=a.answer_id,
+            faculty_id=target_faculty_id,
+            assignment_type=a.assignment_type,
+            status=AssignmentStatus.ASSIGNED,
+        )
+        db.add(new_a)
+        if current_assignment_id and a.id == current_assignment_id:
+            target_returned = new_a
+        elif not target_returned:
+            target_returned = new_a
+
+    db.commit()
+    if target_returned:
+        db.refresh(target_returned)
+        return _enrich_assignment(target_returned)
+
+    if current_assignment_id:
+        existing = db.get(Assignment, current_assignment_id)
+        if existing:
+            return _enrich_assignment(existing)
+
+    raise HTTPException(status_code=400, detail="No active assignments to reassign")
+
+
+@router.post("/{assignment_id}/reassign", response_model=AssignmentRead)
+def reassign_assignment_route(
+    assignment_id: str,
+    payload: ReassignPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """
+    Admin: Reassign all answers for this question in this examination to a specific
+    or lowest-workload eligible faculty member (preserving question-wise allocation).
+    """
+    old = db.get(Assignment, assignment_id)
+    if not old:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    answer = old.answer
+    if not answer or not answer.question:
+        raise HTTPException(status_code=400, detail="Cannot determine question for assignment")
+    question = answer.question
+    exam = question.examination
+    if not exam:
+        raise HTTPException(status_code=400, detail="Cannot determine examination for assignment")
+
+    target_id = payload.faculty_id
+    if not target_id:
+        eligible = db.scalars(
+            select(User)
+            .join(FacultySubject, FacultySubject.faculty_id == User.id)
+            .where(
+                User.role == UserRole.FACULTY,
+                User.is_active.is_(True),
+                User.id != old.faculty_id,
+                FacultySubject.subject_id == exam.subject_id,
+            )
+        ).all()
+        if not eligible:
+            raise HTTPException(status_code=400, detail="No alternative eligible faculty available")
+        eligible.sort(key=lambda f: (
+            len([a for a in f.assignments if a.status in _ACTIVE_STATUSES]),
+            f.full_name or "",
+            f.id,
+        ))
+        target_id = eligible[0].id
+    else:
+        _verify_faculty_eligible(db, target_id, answer)
+
+    return _reassign_question_group(db, question.id, target_id, current_assignment_id=assignment_id)
 
 
 @router.get("/{assignment_id}", response_model=AssignmentRead)
@@ -223,10 +587,10 @@ def update_assignment(
     current_user: User = Depends(require_roles(UserRole.ADMIN)),
 ):
     """
-    Admin: update an assignment's status or reassign it to a different faculty member.
+    Admin: update an assignment's status or reassign the question group to a different faculty member.
     - To cancel: set status=CANCELLED.
-    - To reassign to a different faculty: provide faculty_id (old assignment is
-      marked REASSIGNED and a new ASSIGNED record is created).
+    - To reassign to a different faculty: provide faculty_id (all active answers for this question
+      in this examination are reassigned to preserve question-wise faculty allocation).
     """
     assignment = db.scalars(select(Assignment).where(Assignment.id == assignment_id)).first()
     if not assignment:
@@ -235,49 +599,14 @@ def update_assignment(
             detail=f"Assignment with ID '{assignment_id}' not found",
         )
 
-    # Handle reassignment to a different faculty
+    # Handle reassignment to a different faculty (question-wise)
     if payload.faculty_id and payload.faculty_id != assignment.faculty_id:
         answer = assignment.answer
         _verify_faculty_eligible(db, payload.faculty_id, answer)
-
-        # Prevent duplicate active assignments for the new faculty
-        duplicate = db.scalars(
-            select(Assignment).where(
-                and_(
-                    Assignment.answer_id == assignment.answer_id,
-                    Assignment.faculty_id == payload.faculty_id,
-                    Assignment.assignment_type == assignment.assignment_type,
-                    Assignment.status.in_(list(_ACTIVE_STATUSES)),
-                )
-            )
-        ).first()
-        if duplicate:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Target faculty already has an active assignment for this answer (ID: {duplicate.id})",
-            )
-
-        # Mark old assignment as REASSIGNED
-        assignment.status = AssignmentStatus.REASSIGNED
-        db.flush()
-
-        # Create new assignment for new faculty
-        new_assignment = Assignment(
-            answer_id=assignment.answer_id,
-            faculty_id=payload.faculty_id,
-            assignment_type=assignment.assignment_type,
-            status=AssignmentStatus.ASSIGNED,
-        )
-        db.add(new_assignment)
-        db.commit()
-        db.refresh(new_assignment)
-        logger.info(
-            "Assignment %s reassigned to faculty %s → new assignment %s",
-            assignment_id,
-            payload.faculty_id,
-            new_assignment.id,
-        )
-        return _enrich_assignment(new_assignment)
+        question = answer.question if answer else None
+        if not question:
+            raise HTTPException(status_code=400, detail="Cannot determine question for assignment")
+        return _reassign_question_group(db, question.id, payload.faculty_id, current_assignment_id=assignment_id)
 
     # Handle status update only
     if payload.status:

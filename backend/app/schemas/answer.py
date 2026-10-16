@@ -40,3 +40,18 @@ class AnswerRead(BaseModel):
     question_number: Optional[int] = None
     question_text: Optional[str] = None
     max_marks: Optional[float] = None
+
+    # Extra enriched fields for frontend views
+    has_image: Optional[bool] = False
+    extracted_text: Optional[str] = None
+    segmentation_status: Optional[str] = None
+    ocr_status: Optional[str] = None
+    ocr_corrected: Optional[bool] = False
+    candidate_code: Optional[str] = None
+    examination_name: Optional[str] = None
+    subject: Optional[str] = None
+    model_answer_text: Optional[str] = None
+    rubric: Optional[dict] = None
+    my_evaluation: Optional[dict] = None
+    ai_evaluation: Optional[dict] = None
+

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
 
@@ -12,7 +12,8 @@ from app.schemas.student import StudentCreate, StudentUpdate, StudentRead
 router = APIRouter(prefix="/students", tags=["Students"])
 
 
-@router.post("/", response_model=StudentRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=StudentRead, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=StudentRead, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def create_student(
     payload: StudentCreate,
     db: Session = Depends(get_db),
@@ -39,7 +40,8 @@ def create_student(
     return student
 
 
-@router.get("/", response_model=List[StudentRead])
+@router.get("", response_model=List[StudentRead])
+@router.get("/", response_model=List[StudentRead], include_in_schema=False)
 def list_students(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -134,3 +136,49 @@ def delete_student(
     db.delete(student)
     db.commit()
     return None
+
+
+@router.post("/import")
+async def import_students(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Admin only: Bulk import students from a CSV file."""
+    import csv
+    import io
+
+    content = await file.read()
+    text = content.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+
+    created = 0
+    errors = []
+
+    for row_num, row in enumerate(reader, start=2):
+        reg = (row.get("register_number") or row.get("Register Number") or row.get("reg_no") or "").strip().upper()
+        name = (row.get("name") or row.get("Name") or row.get("student_name") or "").strip()
+        division = (row.get("division") or row.get("Division") or "").strip() or None
+        email = (row.get("email") or row.get("Email") or "").strip().lower() or None
+
+        if not reg or not name:
+            errors.append({"row": row_num, "error": "Missing register_number or name"})
+            continue
+
+        existing = db.scalars(select(Student).where(Student.register_number == reg)).first()
+        if existing:
+            errors.append({"row": row_num, "error": f"Student with register number '{reg}' already exists"})
+            continue
+
+        student = Student(
+            register_number=reg,
+            name=name,
+            division=division,
+            email=email,
+        )
+        db.add(student)
+        created += 1
+
+    db.commit()
+    return {"created": created, "errors": errors}
+
